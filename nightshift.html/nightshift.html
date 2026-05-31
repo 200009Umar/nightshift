@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Night Shift</title>
+<style>
+  /* ---------- BASE ---------- */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    background: #000;
+    color: #eaeaea;
+    font-family: 'Cormorant Garamond', 'Playfair Display', Georgia, 'Times New Roman', serif;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+  body { cursor: default; }
+
+  /* ---------- STAGE ---------- */
+  #stage {
+    position: fixed; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: #000;
+  }
+
+  /* ---------- VIDEO ---------- */
+  #video {
+    width: 100%; height: 100%;
+    object-fit: contain;
+    background: #000;
+    display: none;
+  }
+  #video.visible { display: block; }
+
+  /* ---------- SCREENS (title, ending) ---------- */
+  .screen {
+    position: absolute; inset: 0;
+    display: none;
+    flex-direction: column;
+    align-items: center; justify-content: center;
+    background: #000;
+    text-align: center;
+    padding: 2rem;
+  }
+  .screen.visible { display: flex; }
+
+  .title-main {
+    font-size: clamp(3rem, 9vw, 7rem);
+    font-weight: 400;
+    letter-spacing: 0.3em;
+    color: #fff;
+    margin-bottom: 3rem;
+    opacity: 0;
+    animation: fadeIn 2s ease-in 0.5s forwards;
+  }
+
+  .begin-btn, .restart-btn {
+    background: transparent;
+    border: 1px solid rgba(255,255,255,0.4);
+    color: #fff;
+    padding: 0.9rem 2.5rem;
+    font-family: inherit;
+    font-size: 1.1rem;
+    letter-spacing: 0.2em;
+    cursor: pointer;
+    opacity: 0;
+    animation: fadeIn 1.5s ease-in 2s forwards;
+    transition: background 0.3s, border-color 0.3s;
+  }
+  .begin-btn:hover, .restart-btn:hover {
+    background: rgba(255,255,255,0.08);
+    border-color: rgba(255,255,255,0.8);
+  }
+
+  .ending-label {
+    font-size: clamp(2.5rem, 7vw, 5rem);
+    letter-spacing: 0.4em;
+    color: #fff;
+    margin-bottom: 4rem;
+  }
+
+  /* ---------- DECISION OVERLAY ---------- */
+  #decision {
+    position: absolute; inset: 0;
+    display: none;
+    align-items: center; justify-content: center;
+    background: rgba(0,0,0,0.55);
+    opacity: 0;
+    transition: opacity 0.8s ease-in;
+  }
+  #decision.visible { display: flex; opacity: 1; }
+
+  .choices {
+    display: flex;
+    gap: 2.5rem;
+    flex-wrap: wrap;
+    justify-content: center;
+    padding: 2rem;
+    max-width: 90%;
+  }
+
+  .choice-btn {
+    background: rgba(0,0,0,0.6);
+    border: 1px solid rgba(255,255,255,0.5);
+    color: #fff;
+    padding: 1.5rem 2.5rem;
+    min-width: 280px;
+    font-family: inherit;
+    font-size: 1.3rem;
+    letter-spacing: 0.12em;
+    cursor: pointer;
+    transition: background 0.3s, border-color 0.3s, transform 0.2s;
+    backdrop-filter: blur(2px);
+  }
+  .choice-btn:hover {
+    background: rgba(255,255,255,0.12);
+    border-color: rgba(255,255,255,1);
+    transform: translateY(-2px);
+  }
+  .choice-btn .key-hint {
+    display: block;
+    font-size: 0.75rem;
+    letter-spacing: 0.3em;
+    opacity: 0.5;
+    margin-top: 0.6rem;
+  }
+
+  /* ---------- FADE TRANSITIONS ---------- */
+  #fader {
+    position: absolute; inset: 0;
+    background: #000;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.6s ease-in-out;
+    z-index: 100;
+  }
+  #fader.visible { opacity: 1; }
+
+  /* ---------- ANIMATIONS ---------- */
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  /* ---------- MOBILE ---------- */
+  @media (max-width: 700px) {
+    .choices { flex-direction: column; gap: 1.2rem; }
+    .choice-btn { min-width: 220px; padding: 1.2rem 1.5rem; font-size: 1.1rem; }
+    .choice-btn .key-hint { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<div id="stage">
+  <!-- Video element -->
+  <video id="video" playsinline preload="auto"></video>
+
+  <!-- Title screen -->
+  <div id="title-screen" class="screen visible">
+    <h1 class="title-main">NIGHT SHIFT</h1>
+    <button class="begin-btn" id="begin-btn">BEGIN</button>
+  </div>
+
+  <!-- Ending screen -->
+  <div id="ending-screen" class="screen">
+    <div class="ending-label" id="ending-label"></div>
+    <button class="restart-btn" id="restart-btn">WATCH AGAIN</button>
+  </div>
+
+  <!-- Decision overlay -->
+  <div id="decision">
+    <div class="choices" id="choices"></div>
+  </div>
+
+  <!-- Fader for transitions -->
+  <div id="fader"></div>
+</div>
+
+<script>
+/* ============================================================
+   NIGHT SHIFT — branching player
+   Place this file alongside a /videos/ folder containing:
+     opening.mp4
+     branch-a.mp4
+     branch-b.mp4
+     ending-filed.mp4
+     ending-again.mp4
+     ending-247.mp4
+     ending-discharged.mp4
+   ============================================================ */
+
+const VIDEO_DIR = 'videos/';
+
+// Branching tree definition.
+// Each node points to either a list of choices (a decision)
+// or to an ending label (terminal).
+const NODES = {
+  opening: {
+    src: 'opening.mp4',
+    decision: {
+      prompt: '',
+      choices: [
+        { label: 'Reach for the radio', next: 'branch-a', key: '←' },
+        { label: 'Walk into the dark',  next: 'branch-b', key: '→' }
+      ]
+    }
+  },
+  'branch-a': {
+    src: 'branch-a.mp4',
+    decision: {
+      prompt: '',
+      choices: [
+        { label: 'Hide in the stacks', next: 'ending-filed', key: '←' },
+        { label: 'Take the stairs',    next: 'ending-again', key: '→' }
+      ]
+    }
+  },
+  'branch-b': {
+    src: 'branch-b.mp4',
+    decision: {
+      prompt: '',
+      choices: [
+        { label: 'Open the folder',    next: 'ending-247',        key: '←' },
+        { label: 'Follow the sound',   next: 'ending-discharged', key: '→' }
+      ]
+    }
+  },
+  'ending-filed':      { src: 'ending-filed.mp4',      ending: 'FILED' },
+  'ending-again':      { src: 'ending-again.mp4',      ending: 'AGAIN' },
+  'ending-247':        { src: 'ending-247.mp4',        ending: '2:47 A.M.' },
+  'ending-discharged': { src: 'ending-discharged.mp4', ending: 'DISCHARGED' }
+};
+
+// ---------- DOM ----------
+const video        = document.getElementById('video');
+const titleScreen  = document.getElementById('title-screen');
+const endingScreen = document.getElementById('ending-screen');
+const endingLabel  = document.getElementById('ending-label');
+const beginBtn     = document.getElementById('begin-btn');
+const restartBtn   = document.getElementById('restart-btn');
+const decision     = document.getElementById('decision');
+const choicesBox   = document.getElementById('choices');
+const fader        = document.getElementById('fader');
+
+// ---------- STATE ----------
+let hasSeenOpening = false;   // re-watches skip the opening, jump back to Decision 1
+let activeChoices  = null;    // current decision choices array (for keyboard)
+
+// ---------- HELPERS ----------
+function hide(el)    { el.classList.remove('visible'); }
+function show(el)    { el.classList.add('visible'); }
+
+function fadeOut(cb, ms = 600) {
+  show(fader);
+  setTimeout(() => { cb && cb(); }, ms);
+}
+function fadeIn(ms = 600) {
+  setTimeout(() => hide(fader), 50);
+}
+
+// ---------- FLOW ----------
+function startFilm() {
+  hide(titleScreen);
+  hide(endingScreen);
+  hide(decision);
+  fadeOut(() => {
+    if (!hasSeenOpening) {
+      hasSeenOpening = true;
+      playNode('opening');
+    } else {
+      // Re-watch: jump straight to Decision 1, opening already seen
+      showDecisionFor('opening');
+    }
+    fadeIn();
+  });
+}
+
+function playNode(nodeId) {
+  const node = NODES[nodeId];
+  if (!node) return;
+
+  // Set up the video
+  video.src = VIDEO_DIR + node.src;
+  show(video);
+  hide(decision);
+
+  // Play it (mobile may block until user gesture — Begin handles that)
+  const playPromise = video.play();
+  if (playPromise !== undefined) {
+    playPromise.catch(err => {
+      console.warn('Playback blocked:', err);
+    });
+  }
+
+  // When the video ends, decide what happens next
+  video.onended = () => {
+    if (node.decision) {
+      showDecisionFor(nodeId);
+    } else if (node.ending) {
+      showEnding(node.ending);
+    }
+  };
+}
+
+function showDecisionFor(nodeId) {
+  const node = NODES[nodeId];
+  if (!node || !node.decision) return;
+
+  // Hold on the last frame: pause the video at its end
+  // (video.onended fired; the video is showing its final frame)
+  video.pause();
+
+  // Build the buttons
+  choicesBox.innerHTML = '';
+  activeChoices = node.decision.choices;
+
+  node.decision.choices.forEach((choice, idx) => {
+    const btn = document.createElement('button');
+    btn.className = 'choice-btn';
+    btn.innerHTML = choice.label +
+      (choice.key ? `<span class="key-hint">${choice.key}</span>` : '');
+    btn.onclick = () => pickChoice(choice.next);
+    choicesBox.appendChild(btn);
+  });
+
+  show(decision);
+}
+
+function pickChoice(nextNodeId) {
+  hide(decision);
+  activeChoices = null;
+  fadeOut(() => {
+    playNode(nextNodeId);
+    fadeIn();
+  });
+}
+
+function showEnding(label) {
+  hide(video);
+  endingLabel.textContent = label;
+  show(endingScreen);
+}
+
+function restart() {
+  fadeOut(() => {
+    hide(endingScreen);
+    // Re-watches: skip opening, go to Decision 1
+    showDecisionFor('opening');
+    // Make sure the opening video's last frame is on display
+    video.src = VIDEO_DIR + NODES.opening.src;
+    video.currentTime = 1e9;  // seek past end
+    video.pause();
+    show(video);
+    fadeIn();
+  });
+}
+
+// ---------- INPUT ----------
+beginBtn.addEventListener('click', startFilm);
+restartBtn.addEventListener('click', restart);
+
+// Keyboard: left/right arrows on decision screens
+document.addEventListener('keydown', (e) => {
+  if (!activeChoices) return;
+  if (e.key === 'ArrowLeft'  && activeChoices[0]) pickChoice(activeChoices[0].next);
+  if (e.key === 'ArrowRight' && activeChoices[1]) pickChoice(activeChoices[1].next);
+});
+
+// Fullscreen hint: tap/click on video toggles fullscreen on mobile-ish
+video.addEventListener('click', () => {
+  if (document.fullscreenElement) {
+    document.exitFullscreen?.();
+  } else {
+    video.requestFullscreen?.().catch(() => {});
+  }
+});
+</script>
+
+</body>
+</html>
